@@ -12,8 +12,11 @@ MODEL_PATH = "deepfake_model.pth"
 # 1. Auto-train if model missing
 # -------------------------------
 if not os.path.exists(MODEL_PATH):
-    print("⚠️ deepfake_model.pth not found. Training model automatically...")
-    subprocess.run(["python", "train.py"], check=True)
+    try:
+        print("⚠️ deepfake_model.pth not found. Training model automatically...")
+        subprocess.run(["python", "train.py"], check=True)
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(f"Training failed: {str(e)}")
 
 # -------------------------------
 # 2. Load Model
@@ -34,15 +37,17 @@ model = model.to(device)
 transform = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                         std=[0.229, 0.224, 0.225]),
 ])
 
 # -------------------------------
 # 4. Inference Function
 # -------------------------------
-def detect_deepfake(image_path: str):
+def detect_deepfake(image_path: str) -> dict:
     """
     Predict whether an image is Real or Fake (deepfake).
-    Returns {"prediction": "Real/Fake", "confidence": 0.95}
+    Returns {"prediction": "Real/Fake", "confidence": 95.34}
     """
     try:
         image = Image.open(image_path).convert("RGB")
@@ -54,9 +59,9 @@ def detect_deepfake(image_path: str):
             pred = torch.argmax(probs, dim=1).item()
 
         label = "Real" if pred == 0 else "Fake"
-        confidence = probs[0][pred].item()
+        confidence = round(probs[0][pred].item() * 100, 2)  # percentage
 
-        return {"prediction": label, "confidence": round(confidence, 2)}
+        return {"prediction": label, "confidence": confidence}
 
     except Exception as e:
         return {"error": str(e)}

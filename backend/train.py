@@ -1,4 +1,5 @@
 # train.py
+
 import os
 import torch
 import torch.nn as nn
@@ -9,16 +10,16 @@ import requests
 import json
 import time
 
-
 # -------------------------------
 # 1. Training Config
 # -------------------------------
-DATA_DIR = "dataset"  # must have subfolders: dataset/real, dataset/fake
+DATA_DIR = "dataset"  # must have subfolders: dataset/train/real, dataset/train/fake
 MODEL_SAVE_PATH = "deepfake_model.pth"
 BATCH_SIZE = 8
-EPOCHS = 3   # keep low for testing
+EPOCHS = 3  # keep low for testing
 LEARNING_RATE = 0.001
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
 # -------------------------------
 # 2. Helper: Download small dataset if missing
@@ -58,18 +59,20 @@ def setup_sample_dataset():
             print(f"Error: {e}")
 
     # Download reals
-    for i, (url, name) in enumerate(real_images):
+    for url, name in real_images:
         download(url, f"dataset/train/real/{name}")
         download(url, f"dataset/val/real/val_{name}")
 
     # Download fakes
-    for i, (url, name) in enumerate(fake_images):
+    for url, name in fake_images:
         download(url, f"dataset/train/fake/{name}")
         download(url, f"dataset/val/fake/val_{name}")
+
 
 # Check dataset
 if not os.path.exists(os.path.join(DATA_DIR, "train")):
     setup_sample_dataset()
+
 
 # -------------------------------
 # 3. Data Loading & Augmentation
@@ -85,6 +88,7 @@ val_dataset = datasets.ImageFolder(os.path.join(DATA_DIR, "val"), transform=tran
 train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
 val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
+
 # -------------------------------
 # 4. Model Definition
 # -------------------------------
@@ -96,17 +100,33 @@ model = model.to(DEVICE)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
 
+
 # -------------------------------
-# 5. Training Loop
+# 5. Training & Validation
 # -------------------------------
-def train():
+def validate() -> float:
+    model.eval()
+    correct, total = 0, 0
+    with torch.no_grad():
+        for images, labels in val_loader:
+            images, labels = images.to(DEVICE), labels.to(DEVICE)
+            outputs = model(images)
+            _, predicted = torch.max(outputs, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
+    acc = 100 * correct / total
+    print(f"🔎 Validation Accuracy: {acc:.2f}%")
+    return acc
+
+
+def train() -> float:
+    final_train_acc = 0.0
     for epoch in range(EPOCHS):
         model.train()
         running_loss, correct, total = 0.0, 0, 0
 
         for images, labels in train_loader:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
-
             optimizer.zero_grad()
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -118,43 +138,24 @@ def train():
             total += labels.size(0)
             correct += (predicted == labels).sum().item()
 
-        train_acc = 100 * correct / total
-        print(f"📚 Epoch {epoch+1}/{EPOCHS}, Loss: {running_loss/len(train_loader):.4f}, Train Acc: {train_acc:.2f}%")
-
+        final_train_acc = 100 * correct / total
+        print(f"📚 Epoch {epoch+1}/{EPOCHS}, Loss: {running_loss/len(train_loader):.4f}, Train Acc: {final_train_acc:.2f}%")
         validate()
 
     torch.save(model.state_dict(), MODEL_SAVE_PATH)
     print(f"✅ Model saved as {MODEL_SAVE_PATH}")
+    return final_train_acc
 
-# -------------------------------
-# 6. Validation
-# -------------------------------
-def validate():
-    model.eval()
-    correct, total = 0, 0
-    with torch.no_grad():
-        for images, labels in val_loader:
-            images, labels = images.to(DEVICE), labels.to(DEVICE)
-            outputs = model(images)
-            _, predicted = torch.max(outputs, 1)
-            total += labels.size(0)
-            correct += (predicted == labels).sum().item()
-
-    acc = 100 * correct / total
-    print(f"🔎 Validation Accuracy: {acc:.2f}%")
 
 if __name__ == "__main__":
-    train()
-    torch.save(model.state_dict(), MODEL_SAVE_PATH)
-    print(f"✅ Model saved as {MODEL_SAVE_PATH}")
+    final_train_acc = train()
 
-    # Save metadata (last training info)
+    # Save metadata
     metadata = {
         "last_trained": time.strftime("%Y-%m-%d %H:%M:%S"),
         "epochs": EPOCHS,
-        "final_train_acc": round(train_acc, 2),
+        "final_train_acc": round(final_train_acc, 2),
     }
     with open("model_metadata.json", "w") as f:
         json.dump(metadata, f)
     print("📝 Training metadata saved as model_metadata.json")
-
